@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Session Report</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --line:#272b35; --text:#e6e8ec;
+    --muted:#9aa3b2; --accent:#d97757; --accent2:#5b8def; --ok:#3fb950;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f6f7f9; --panel:#fff; --line:#e3e6ea; --text:#1a1c20;
+           --muted:#6b7280; --accent:#c2410c; --accent2:#2563eb; --ok:#15803d; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:14px/1.5 -apple-system,Segoe UI,Roboto,Arial,sans-serif}
+  header{padding:18px 22px;border-bottom:1px solid var(--line);
+         display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+  h1{font-size:18px;margin:0;margin-right:auto}
+  button{background:var(--accent);color:#fff;border:0;border-radius:8px;
+         padding:9px 14px;font-size:14px;cursor:pointer}
+  button.sec{background:transparent;color:var(--text);border:1px solid var(--line)}
+  button:hover{filter:brightness(1.08)}
+  button:disabled{opacity:.4;cursor:default}
+  select,input[type=search]{background:var(--panel);border:1px solid var(--line);
+    color:var(--text);border-radius:8px;padding:8px 12px;font-size:14px}
+  input[type=search]{min-width:220px}
+  .path{font:12px ui-monospace,Consolas,monospace;color:var(--muted)}
+  .wrap{padding:18px 22px}
+  .cards{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:18px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+        padding:12px 16px;min-width:140px}
+  .card .n{font-size:22px;font-weight:600}
+  .card .l{color:var(--muted);font-size:12px}
+  .nav{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+  .nav .period{font-size:16px;font-weight:600;min-width:240px;text-align:center}
+  .nav button.arrow{background:var(--panel);border:1px solid var(--line);
+    color:var(--text);font-size:16px;width:38px;padding:7px 0;line-height:1}
+  table{width:100%;border-collapse:collapse;background:var(--panel);
+        border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);
+        vertical-align:top}
+  th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;
+     user-select:none;white-space:nowrap;position:sticky;top:0;background:var(--panel)}
+  th.sortable{cursor:pointer}
+  th.sortable:hover{color:var(--text)}
+  tr:last-child td{border-bottom:0}
+  td.num{font:12px ui-monospace,Consolas,monospace;white-space:nowrap}
+  td.dur{font:12px ui-monospace,Consolas,monospace;white-space:nowrap;color:var(--accent2)}
+  .proj{display:inline-block;padding:1px 7px;border-radius:5px;
+        background:var(--line);font-size:12px;white-space:nowrap}
+  .prompt{max-width:680px;white-space:pre-wrap;word-break:break-word}
+  .prompt.clip{max-height:5.4em;overflow:hidden;position:relative}
+  .muted{color:var(--muted)}
+  .empty{padding:40px;text-align:center;color:var(--muted)}
+  h2{font-size:13px;margin:22px 0 8px;color:var(--muted);text-transform:uppercase;
+     letter-spacing:.03em}
+  details{margin-top:10px}
+  details summary{cursor:pointer;color:var(--muted);padding:6px 0}
+  .scroll{overflow:auto;max-height:62vh}
+  .daygroup{margin:14px 0 4px;font-weight:600}
+  tr.clickable{cursor:pointer}
+  tr.clickable:hover td{background:color-mix(in srgb,var(--accent2) 8%,transparent)}
+  /* ---- modal ---- */
+  #modal{display:none;position:fixed;inset:0;z-index:100;
+         background:rgba(0,0,0,.65);backdrop-filter:blur(3px);overflow:auto}
+  #modal.open{display:flex;align-items:flex-start;justify-content:center;padding:32px 16px}
+  .modal-box{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+             width:100%;max-width:860px;display:flex;flex-direction:column;gap:0}
+  .modal-head{display:flex;align-items:center;gap:10px;padding:16px 20px;
+              border-bottom:1px solid var(--line);position:sticky;top:0;
+              background:var(--panel);border-radius:14px 14px 0 0;z-index:1}
+  .modal-head .meta{font-size:12px;color:var(--muted);flex:1}
+  .modal-close{background:transparent;border:1px solid var(--line);color:var(--text);
+               border-radius:7px;padding:5px 12px;font-size:15px;cursor:pointer}
+  .modal-close:hover{background:var(--line)}
+  .modal-body{padding:20px;display:flex;flex-direction:column;gap:16px}
+  .bubble{border-radius:10px;padding:14px 16px;line-height:1.6;white-space:pre-wrap;
+          word-break:break-word;font-size:14px}
+  .bubble.user{background:color-mix(in srgb,var(--accent2) 12%,transparent);
+               border:1px solid color-mix(in srgb,var(--accent2) 30%,transparent)}
+  .bubble.user::before{content:'Prompt';display:block;font-size:11px;font-weight:600;
+                       color:var(--accent2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em}
+  .bubble.reply{background:var(--bg);border:1px solid var(--line)}
+  .bubble.reply::before{content:'Response';display:block;font-size:11px;font-weight:600;
+                        color:var(--ok);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em}
+  .think-wrap{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .think-wrap summary{padding:10px 14px;cursor:pointer;font-size:12px;font-weight:600;
+                      color:var(--muted);text-transform:uppercase;letter-spacing:.04em;
+                      user-select:none;list-style:none;display:flex;align-items:center;gap:6px}
+  .think-wrap summary::before{content:'▶';font-size:10px;transition:transform .15s}
+  .think-wrap[open] summary::before{transform:rotate(90deg)}
+  .think-wrap summary:hover{color:var(--text)}
+  .think-body{padding:12px 14px;font-size:13px;color:var(--muted);white-space:pre-wrap;
+              word-break:break-word;line-height:1.6;border-top:1px solid var(--line)}
+  .reply-md code{background:var(--line);border-radius:4px;padding:1px 5px;font-size:12px;
+                 font-family:ui-monospace,Consolas,monospace}
+  .reply-md pre{background:var(--line);border-radius:8px;padding:12px;overflow:auto;
+                font-size:12px;font-family:ui-monospace,Consolas,monospace;margin:8px 0}
+  .reply-md pre code{background:none;padding:0}
+  .reply-md h1,.reply-md h2,.reply-md h3{margin:.6em 0 .3em;font-weight:600}
+  .reply-md h1{font-size:1.2em} .reply-md h2{font-size:1.1em} .reply-md h3{font-size:1em}
+  .reply-md ul,.reply-md ol{padding-left:1.4em;margin:.4em 0}
+  .reply-md li{margin:.2em 0}
+  .reply-md strong{font-weight:700} .reply-md em{font-style:italic}
+  .reply-md hr{border:none;border-top:1px solid var(--line);margin:.8em 0}
+  .tool-call{border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:13px}
+  .tool-call summary{padding:9px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;
+                     user-select:none;list-style:none}
+  .tool-call summary::before{content:'▶';font-size:10px;transition:transform .15s;color:var(--muted)}
+  .tool-call[open] summary::before{transform:rotate(90deg)}
+  .tool-name{font-family:ui-monospace,Consolas,monospace;font-weight:600;color:var(--accent)}
+  .tool-label{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+  .tool-arg{font-size:11px;color:var(--muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tool-body{padding:10px 14px;border-top:1px solid var(--line);background:var(--bg);
+             font:12px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;
+             word-break:break-all;max-height:320px;overflow:auto}
+  .tool-result{border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:13px;
+               border-left:3px solid var(--accent2)}
+  .tool-result summary{padding:9px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;
+                       user-select:none;list-style:none;color:var(--muted)}
+  .tool-result summary::before{content:'▶';font-size:10px;transition:transform .15s}
+  .tool-result[open] summary::before{transform:rotate(90deg)}
+  .result-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--accent2)}
+  .result-preview{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;
+                  font-family:ui-monospace,Consolas,monospace}
+  .result-body{padding:10px 14px;border-top:1px solid var(--line);background:var(--bg);
+               font:12px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;
+               word-break:break-word;max-height:400px;overflow:auto}
+</style>
+</head>
+<body>
+<header>
+  <h1>📊 Claude Session Report</h1>
+  <span class="path" id="pathHint">C:\Users\your_User\.claude\projects</span>
+  <button id="pick">Connect folder</button>
+  <button class="sec" id="reload" title="Reload" hidden>↻ Refresh</button>
+  <button class="sec" id="csv" hidden>Download CSV</button>
+</header>
+
+<div class="wrap">
+  <div id="status" class="empty">
+    Click «Connect folder» and select the <b>projects</b> folder<br>
+    (<span class="path">C:\Users\your_User\.claude\projects</span>).<br><br>
+    <span class="muted">The folder will be remembered — next time one click is enough.</span>
+  </div>
+
+  <div id="report" hidden>
+    <div class="cards" id="cards"></div>
+
+    <div class="nav">
+      <label>Mode:
+        <select id="mode">
+          <option value="day">By day</option>
+          <option value="week">By week</option>
+          <option value="all">All sessions</option>
+        </select>
+      </label>
+      <span id="navGroup" class="nav" style="margin:0">
+        <button class="arrow" id="prev" title="Previous">‹</button>
+        <span class="period" id="period"></span>
+        <button class="arrow" id="next" title="Next">›</button>
+        <button class="sec" id="latest">Latest</button>
+      </span>
+      <input type="search" id="filter" placeholder="Filter…" style="margin-left:auto">
+    </div>
+
+    <div id="modelFilter" style="padding:8px 22px; border-bottom:1px solid var(--line); display:flex; gap:12px; flex-wrap:wrap; align-items:center"></div>
+
+    <div id="view"></div>
+  </div>
+</div>
+
+<div id="modal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <div class="meta" id="modal-meta"></div>
+      <button class="modal-close" id="modal-close">✕ Close</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<script>
+//// ---- IndexedDB handle storage ----
+const DB='claudeReport', STORE='kv';
+function idb(){return new Promise((res,rej)=>{const r=indexedDB.open(DB,1);
+  r.onupgradeneeded=()=>r.result.createObjectStore(STORE);
+  r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error);});}
+async function idbGet(k){const db=await idb();return new Promise((res,rej)=>{
+  const t=db.transaction(STORE).objectStore(STORE).get(k);
+  t.onsuccess=()=>res(t.result); t.onerror=()=>rej(t.error);});}
+async function idbSet(k,v){const db=await idb();return new Promise((res,rej)=>{
+  const t=db.transaction(STORE,'readwrite').objectStore(STORE).put(v,k);
+  t.onsuccess=()=>res(); t.onerror=()=>rej(t.error);});}
+
+//// ---- state ----
+let sessions=[], allPrompts=[], allUsage=[];
+let mode='day', cursor=new Date();
+let sortKey='start', sortDir=1;
+const $=s=>document.querySelector(s);
+
+//// ---- parsing ----
+function parseTs(v){ if(!v) return null; const d=new Date(v); return isNaN(d)?null:d; }
+function humanPrompt(rec){
+  if(rec.type!=='user') return null;
+  const m=rec.message||{}; if(m.role!=='user') return null;
+  const c=m.content; if(typeof c!=='string') return null;
+  const t=c.trim();
+  if(!t||t[0]==='<'||t.startsWith('Caveat:')||t.startsWith('[Request interrupted'))
+    return null;
+  return t;
+}
+function scan(text, project, session, seen){
+  let start=null,end=null,first=null,items=[],usage=[];
+  let tin=0,tout=0,tcw=0,tcr=0,tcost=0,model='',cur=null;
+  for(const line of text.split('\n')){
+    const s=line.trim(); if(!s) continue;
+    let rec; try{rec=JSON.parse(s);}catch{continue;}
+    const ts=parseTs(rec.timestamp);
+    if(ts){ if(!start||ts<start)start=ts; if(!end||ts>end)end=ts; }
+    const p=humanPrompt(rec);
+    if(p){ if(!first)first=p;
+      cur={ts: ts||start||new Date(), text:p, tin:0,tout:0,tcw:0,tcr:0, cost:0, model:'', replies:[]};
+      items.push(cur); }
+    // tool_result blocks live in user messages (API continuation turns, not human prompts)
+    if(!p && rec.type==='user' && cur){
+      for(const block of (Array.isArray(rec.message?.content)?rec.message.content:[])){
+        if(block.type==='tool_result')
+          cur.replies.push({type:'result', id:block.tool_use_id, content:block.content||''});
+      }
+    }
+    if(rec.type==='assistant' && rec.message){
+      const mid=rec.message.id;
+      const isDup=mid && seen.has(mid);
+      // token counting: dedup to avoid double-counting from resumed sessions
+      if(!isDup){
+        if(mid) seen.add(mid);
+        const u=rec.message.usage;
+        if(u){
+          const i=u.input_tokens||0, o=u.output_tokens||0,
+                cw=u.cache_creation_input_tokens||0, cr=u.cache_read_input_tokens||0;
+          const mdl=rec.message.model||''; const c=costEvent(mdl,i,o,cw,cr);
+          tin+=i; tout+=o; tcw+=cw; tcr+=cr; tcost+=c;
+          if(cur){ cur.tin+=i; cur.tout+=o; cur.tcw+=cw; cur.tcr+=cr; cur.cost+=c;
+                   if(mdl) cur.model=mdl; }
+          if(mdl) model=mdl;
+          usage.push({ts: ts||end||new Date(), i,o,cw,cr, cost:c, model:mdl});
+        }
+      }
+      // collect content blocks from ALL records — streaming logs same message.id
+      // multiple times with progressively more content (thinking → tool_use → text)
+      if(cur){
+        for(const block of (rec.message.content||[])){
+          if(block.type==='thinking' && block.thinking){
+            // streaming may log same thinking under one message.id repeatedly — dedup by text
+            const have=cur.replies.some(r=>r.type==='thinking'&&r.text===block.thinking);
+            if(!have) cur.replies.push({type:'thinking', text:block.thinking});
+          } else if(block.type==='text' && block.text){
+            // final text response often arrives in a later record with an already-seen id;
+            // collect regardless of isDup, dedup by text content
+            const have=cur.replies.some(r=>r.type==='text'&&r.text===block.text);
+            if(!have) cur.replies.push({type:'text', text:block.text});
+          } else if(block.type==='tool_use' && block.name){
+            // tool_use blocks may appear in a later record for same message.id
+            const have=cur.replies.some(r=>r.type==='tool'&&r.tool_id===block.id);
+            if(!have) cur.replies.push({type:'tool', name:block.name, input:block.input||{}, tool_id:block.id});
+          }
+        }
+      }
+    }
+  }
+  if(!start) return null;
+  return {project,session,start,end:end||start,durMs:(end||start)-start,
+          msgs:items.length, prompt:first||'(no text prompt)', items, usage,
+          tin,tout,tcw,tcr, tcost, model};
+}
+
+//// ---- loading ----
+async function* walk(dir, prefix=''){
+  for await (const [name,h] of dir.entries()){
+    if(h.kind==='file' && name.endsWith('.jsonl')) yield {path:prefix+name, handle:h};
+    else if(h.kind==='directory') yield* walk(h, prefix+name+'/');
+  }
+}
+function ingest(r){
+  sessions.push({project:r.project, session:r.session, start:r.start, end:r.end,
+                 durMs:r.durMs, msgs:r.msgs, prompt:r.prompt,
+                 tin:r.tin, tout:r.tout, tcw:r.tcw, tcr:r.tcr,
+                 toktot:r.tin+r.tout+r.tcw+r.tcr, cost:r.tcost, model:r.model});
+  for(const it of r.items)
+    allPrompts.push({ts:it.ts, text:it.text, project:r.project, session:r.session,
+      tin:it.tin, tout:it.tout, tcw:it.tcw, tcr:it.tcr,
+      toktot:it.tin+it.tout+it.tcw+it.tcr, cost:it.cost, model:it.model||r.model||'', replies:it.replies||[]});
+  for(const u of r.usage)
+    allUsage.push({...u, project:r.project, session:r.session});
+}
+async function loadFromHandle(dirHandle){
+  sessions=[]; allPrompts=[]; allUsage=[]; const seen=new Set();
+  for await (const f of walk(dirHandle)){
+    const parts=f.path.split('/');
+    const project = parts.length>1 ? parts[parts.length-2] : dirHandle.name;
+    const session = parts[parts.length-1].replace(/\.jsonl$/,'');
+    const r=scan(await (await f.handle.getFile()).text(), project, session, seen);
+    if(r) ingest(r);
+  }
+}
+async function loadFromFiles(fileList){
+  sessions=[]; allPrompts=[]; allUsage=[]; const seen=new Set();
+  for(const file of fileList){
+    if(!file.name.endsWith('.jsonl')) continue;
+    const rel=(file.webkitRelativePath||file.name).split('/');
+    const project = rel.length>1 ? rel[rel.length-2] : 'project';
+    const session = file.name.replace(/\.jsonl$/,'');
+    const r=scan(await file.text(), project, session, seen);
+    if(r) ingest(r);
+  }
+}
+
+//// ---- dates ----
+const WD=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const pad=n=>String(n).padStart(2,'0');
+const ftime=d=>`${pad(d.getHours())}:${pad(d.getMinutes())}`;
+const fdate=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${ftime(d)}`;
+const dayKey=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+function startOfDay(d){const x=new Date(d);x.setHours(0,0,0,0);return x;}
+function startOfWeek(d){const x=startOfDay(d);const dow=(x.getDay()+6)%7;
+  x.setDate(x.getDate()-dow);return x;}
+function addDays(d,n){const x=new Date(d);x.setDate(x.getDate()+n);return x;}
+function fdur(ms){ const s=Math.round(ms/1000); const h=Math.floor(s/3600),
+  m=Math.floor(s%3600/60), ss=s%60;
+  if(h) return `${h}h ${pad(m)}m`; if(m) return `${m}m ${pad(ss)}s`; return `${ss}s`; }
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))
+
+//// ---- minimal markdown → html ----
+function md(raw){
+  const lines=raw.split('\n');
+  let html='', inPre=false, inUl=false, inOl=false;
+  const closeList=()=>{ if(inUl){html+='</ul>';inUl=false;} if(inOl){html+='</ol>';inOl=false;} };
+  const inline=s=>s
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/`([^`]+)`/g,'<code>$1</code>')
+    .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g,'<em>$1</em>');
+  for(let i=0;i<lines.length;i++){
+    const l=lines[i];
+    if(l.startsWith('```')){
+      if(inPre){html+='</code></pre>';inPre=false;}
+      else{closeList();html+='<pre><code>';inPre=true;}
+      continue;
+    }
+    if(inPre){html+=esc(l)+'\n';continue;}
+    if(!l.trim()){closeList();html+='<br>';continue;}
+    const hm=l.match(/^(#{1,3})\s+(.*)/);
+    if(hm){closeList();const n=hm[1].length;html+=`<h${n}>${inline(hm[2])}</h${n}>`;continue;}
+    if(/^---+$/.test(l)){closeList();html+='<hr>';continue;}
+    const ulm=l.match(/^[-*]\s+(.*)/);
+    if(ulm){if(!inUl){closeList();html+='<ul>';inUl=true;}html+=`<li>${inline(ulm[1])}</li>`;continue;}
+    const olm=l.match(/^\d+\.\s+(.*)/);
+    if(olm){if(!inOl){closeList();html+='<ol>';inOl=true;}html+=`<li>${inline(olm[1])}</li>`;continue;}
+    closeList();
+    html+=`<p>${inline(l)}</p>`;
+  }
+  if(inPre) html+='</code></pre>';
+  closeList();
+  return html;
+}
+
+//// ---- modal ----
+let _promptList=[];
+let _selectedModels=new Set(); // model filter state
+let _allModelsSelected=true; // toggle state for Select All / Clear All
+
+// ---- model filtering ----
+function getUniqueModels(prompts){
+  const models=new Set();
+  for(const p of prompts){
+    if(p.model) models.add(p.model);
+  }
+  return Array.from(models).sort();
+}
+
+function renderModelFilter(){
+  const models=getUniqueModels(allPrompts);
+  if(!models.length){ $('#modelFilter').innerHTML=''; return; }
+  let html=`<span style="font-size:12px;color:var(--muted);text-transform:uppercase">Models:</span>`;
+  for(const m of models){
+    const short=shortModel(m);
+    const id='model_'+m.replace(/[^a-z0-9]/gi,'_');
+    const chk=_allModelsSelected || _selectedModels.has(m);
+    html+=`<label style="cursor:pointer;display:flex;align-items:center;gap:5px;margin:0">
+      <input type="checkbox" id="${id}" value="${esc(m)}" ${chk?'checked':''}
+             onchange="toggleModel('${esc(m)}',this.checked); render()">
+      <span style="font-size:13px">${esc(short)}</span>
+    </label>`;
+  }
+  const btnText = _allModelsSelected ? 'Clear All' : 'Select All';
+  html+=`<button class="sec" style="padding:5px 10px;font-size:12px;margin-left:8px" onclick="toggleAllModels(); render()">${btnText}</button>`;
+  $('#modelFilter').innerHTML=html;
+}
+
+function toggleModel(m,on){
+  _allModelsSelected=false; // user made a manual selection, no longer in "all" mode
+  if(on) _selectedModels.add(m); else _selectedModels.delete(m);
+}
+
+function toggleAllModels(){
+  _allModelsSelected=!_allModelsSelected;
+  _selectedModels.clear();
+}
+
+// extract plain text from tool_result content (string or array of blocks)
+function resultText(content){
+  if(typeof content==='string') return content;
+  if(Array.isArray(content))
+    return content.filter(b=>b.type==='text').map(b=>b.text).join('\n');
+  return String(content||'');
+}
+
+// short one-line hint shown in collapsed tool-call row
+function toolPreview(r){
+  const i=r.input||{};
+  if(i.file_path) return i.file_path;
+  if(i.path)      return i.path;
+  if(i.pattern)   return i.pattern+(i.path?' in '+i.path:'');
+  if(i.command)   return String(i.command).slice(0,80);
+  if(i.prompt)    return String(i.prompt).slice(0,80);
+  if(i.description) return String(i.description).slice(0,80);
+  const first=Object.values(i)[0];
+  return first ? String(first).slice(0,80) : '';
+}
+
+function openPrompt(idx){
+  const p=_promptList[idx]; if(!p) return;
+  $('#modal-meta').innerHTML=
+    `<span class="proj">${esc(p.project)}</span> &nbsp;`+
+    `<span>${fdate(p.ts)}</span> &nbsp;`+
+    (p.model?`<span class="proj">${esc(shortModel(p.model))}</span> &nbsp;`:'')+
+    `<span class="muted">${fnum(p.toktot)} tokens · ${fcost(p.cost)}</span>`;
+  let body=`<div class="bubble user">${esc(p.text)}</div>`;
+  for(const r of (p.replies||[])){
+    if(r.type==='thinking')
+      body+=`<details class="think-wrap"><summary>Model thinking</summary>`+
+            `<div class="think-body">${esc(r.text)}</div></details>`;
+    else if(r.type==='tool'){
+      const preview=toolPreview(r);
+      body+=`<details class="tool-call"><summary>`+
+            `<span class="tool-label">Tool</span>`+
+            `<span class="tool-name">${esc(r.name)}</span>`+
+            `<span class="tool-arg">${esc(preview)}</span>`+
+            `</summary><div class="tool-body">${esc(JSON.stringify(r.input,null,2))}</div></details>`;
+    } else if(r.type==='result'){
+      const txt=resultText(r.content);
+      const preview=txt.slice(0,120).replace(/\n/g,' ');
+      body+=`<details class="tool-result"><summary>`+
+            `<span class="result-label">Result</span>`+
+            `<span class="result-preview">${esc(preview)}</span>`+
+            `</summary><div class="result-body">${esc(txt)}</div></details>`;
+    } else
+      body+=`<div class="bubble reply"><div class="reply-md">${md(r.text)}</div></div>`;
+  }
+  if(!p.replies||!p.replies.length)
+    body+=`<div class="bubble reply muted">No response data (metrics only)</div>`;
+  $('#modal-body').innerHTML=body;
+  $('#modal').classList.add('open');
+  document.body.style.overflow='hidden';
+}
+function closeModal(){
+  $('#modal').classList.remove('open');
+  document.body.style.overflow='';
+}
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') closeModal(); });
+document.getElementById('modal-close').addEventListener('click',closeModal);
+document.getElementById('modal').addEventListener('click',e=>{ if(e.target===e.currentTarget) closeModal(); });;
+const PAUSE_MS = 30 * 60 * 1000; // gap > 30min counts as a pause
+const TAIL_MS  =  5 * 60 * 1000; // assume 5min activity after last prompt
+
+// active work time from a sorted list of prompt timestamps
+function activeMs(sorted){
+  if(!sorted.length) return 0;
+  let ms=0;
+  for(let i=0;i<sorted.length;i++){
+    const s=sorted[i], isLast=i===sorted.length-1;
+    const e=isLast ? s+TAIL_MS : Math.min(sorted[i+1], s+PAUSE_MS);
+    ms+=e-s;
+  }
+  return ms;
+}
+
+// active work time for prompts in interval [a,b)
+function workMsIn(a,b){
+  const ts=allPrompts.filter(p=>p.ts>=a&&p.ts<b).map(p=>+p.ts).sort((x,y)=>x-y);
+  return activeMs(ts);
+}
+
+// annotate prompt list with per-prompt start/end/dur
+function withDur(list){
+  const sorted=[...list].sort((a,b)=>a.ts-b.ts);
+  return sorted.map((p,i)=>{
+    const next=sorted[i+1];
+    const endMs=next ? Math.min(+next.ts, +p.ts+PAUSE_MS) : +p.ts+TAIL_MS;
+    return {...p, endTs:new Date(endMs), dur:endMs-p.ts};
+  });
+}
+
+// ---- tokens & pricing ----
+// rates $/1M tokens: [input, output, cache write (5m), cache read]
+// public API prices; <synthetic> and unknown models = 0
+const PRICES={
+  'claude-opus-4-8'           : {in:15,  out:75, cw:18.75, cr:1.5},
+  'claude-sonnet-4-6'         : {in:3,   out:15, cw:3.75,  cr:0.30},
+  'claude-haiku-4-5-20251001' : {in:1,   out:5,  cw:1.25,  cr:0.10},
+};
+function priceFor(model){
+  if(PRICES[model]) return PRICES[model];
+  // fallback match by model family
+  if(/opus/.test(model))   return PRICES['claude-opus-4-8'];
+  if(/sonnet/.test(model)) return PRICES['claude-sonnet-4-6'];
+  if(/haiku/.test(model))  return PRICES['claude-haiku-4-5-20251001'];
+  return {in:0,out:0,cw:0,cr:0}; // <synthetic> etc.
+}
+function costEvent(model,i,o,cw,cr){ const p=priceFor(model);
+  return (i*p.in + o*p.out + cw*p.cw + cr*p.cr)/1e6; }
+const fnum=n=> n>=1e6 ? (n/1e6).toFixed(2)+'M' : n>=1e3 ? (n/1e3).toFixed(1)+'k' : String(n);
+const fcost=v=> '$'+(v<10 ? v.toFixed(2) : v.toFixed(0));
+// short model label, e.g. claude-opus-4-8 -> Opus 4.8
+function shortModel(m){
+  if(!m) return '';
+  const fam=/opus/i.test(m)?'Opus':/sonnet/i.test(m)?'Sonnet':/haiku/i.test(m)?'Haiku':null;
+  if(!fam) return m.replace(/^claude-/,'');
+  const nums=(m.match(/(\d+)-(\d+)/)||[]);
+  return nums.length ? `${fam} ${nums[1]}.${nums[2]}` : fam;
+}
+// sum tokens and cost for usage events in interval [a,b)
+function tokIn(a,b){ const t={tin:0,tout:0,tcw:0,tcr:0,cost:0};
+  for(const u of allUsage){ if(u.ts>=a&&u.ts<b){
+    t.tin+=u.i; t.tout+=u.o; t.tcw+=u.cw; t.tcr+=u.cr; t.cost+=u.cost; } } return t; }
+const tokTotal=t=>t.tin+t.tout+t.tcw+t.tcr;
+function tokCards(t){ return `
+  <div class="card"><div class="n">${fnum(tokTotal(t))}</div><div class="l">tokens total</div></div>
+  <div class="card"><div class="n">${fnum(t.tin)}</div><div class="l">input</div></div>
+  <div class="card"><div class="n">${fnum(t.tout)}</div><div class="l">output</div></div>
+  <div class="card"><div class="n">${fnum(t.tcr)}</div><div class="l">cache read</div></div>
+  <div class="card"><div class="n">${fcost(t.cost)}</div><div class="l">≈ cost</div></div>`; }
+
+function period(){
+  if(mode==='week'){ const a=startOfWeek(cursor); const b=addDays(a,7);
+    const e=addDays(a,6);
+    const lbl = a.getMonth()===e.getMonth()
+      ? `${a.getDate()}–${e.getDate()} ${MON[a.getMonth()]} ${a.getFullYear()}`
+      : `${a.getDate()} ${MON[a.getMonth()]} – ${e.getDate()} ${MON[e.getMonth()]} ${a.getFullYear()}`;
+    return {a:+a,b:+b,label:'Week: '+lbl,step:7}; }
+  const a=startOfDay(cursor); const b=addDays(a,1);
+  return {a:+a,b:+b,label:`${dayKey(a)}, ${WD[(a.getDay()+6)%7]}`,step:1};
+}
+
+//// ---- renderers ----
+function cards(){
+  const total=sessions.reduce((s,r)=>s+r.durMs,0);
+  const t={tin:0,tout:0,tcw:0,tcr:0,cost:0};
+  for(const s of sessions){ t.tin+=s.tin; t.tout+=s.tout; t.tcw+=s.tcw; t.tcr+=s.tcr; t.cost+=s.cost; }
+  $('#cards').innerHTML=`
+    <div class="card"><div class="n">${sessions.length}</div><div class="l">sessions</div></div>
+    <div class="card"><div class="n">${fdur(total)}</div><div class="l">total time</div></div>
+    <div class="card"><div class="n">${allPrompts.length}</div><div class="l">prompts</div></div>
+    <div class="card"><div class="n">${fnum(tokTotal(t))}</div><div class="l">tokens total</div></div>
+    <div class="card"><div class="n">${fcost(t.cost)}</div><div class="l">≈ cost</div></div>`;
+}
+
+function promptRows(list){
+  const q=$('#filter').value.toLowerCase().trim();
+  const modelOk=p=>_allModelsSelected ? true : _selectedModels.has(p.model||'');
+  const filtered=list.filter(p=>modelOk(p)&&(!q||p.text.toLowerCase().includes(q)||p.project.toLowerCase().includes(q)));
+  _promptList=withDur(filtered);
+  return _promptList.map((p,i)=>`<tr class="clickable" onclick="openPrompt(${i})">
+      <td class="num">${ftime(p.ts)}</td>
+      <td class="num">${ftime(p.endTs)}</td>
+      <td class="num">${fdur(p.dur)}</td>
+      <td><span class="proj">${esc(p.project)}</span></td>
+      <td class="num" title="${esc(p.model||'')}">${esc(shortModel(p.model))}</td>
+      <td class="num" title="in ${p.tin}, out ${p.tout}, cache write ${p.tcw}, cache read ${p.tcr}">${fnum(p.toktot)}</td>
+      <td class="num">${fcost(p.cost)}</td>
+      <td class="prompt clip">${esc(p.text)}</td></tr>`).join('');
+}
+
+function renderDay(){
+  const {a,b}=period();
+  const list=allPrompts.filter(p=>p.ts>=a&&p.ts<b);
+  const work=workMsIn(a,b);
+  const rows=promptRows(list);
+  $('#view').innerHTML=`
+    <div class="cards">
+      <div class="card"><div class="n">${list.length}</div><div class="l">prompts today</div></div>
+      <div class="card"><div class="n">${fdur(work)}</div><div class="l">active time</div></div>
+      ${tokCards(tokIn(a,b))}
+    </div>
+    <div class="scroll"><table>
+      <thead><tr><th style="width:55px">Start</th><th style="width:55px">End</th><th style="width:65px">Dur.</th><th style="width:120px">Project</th><th style="width:80px">Model</th><th style="width:75px">Tokens</th><th style="width:55px">≈ $</th><th>Prompt</th></tr></thead>
+      <tbody>${rows||`<tr><td colspan="8" class="empty">No prompts for this day</td></tr>`}</tbody>
+    </table></div>`;
+}
+
+function renderWeek(){
+  const {a,b}=period();
+  const work=workMsIn(a,b);
+  const inWeek=allPrompts.filter(p=>p.ts>=a&&p.ts<b);
+  // breakdown by day
+  let days='';
+  for(let i=0;i<7;i++){ const d0=+addDays(a,i), d1=+addDays(a,i+1);
+    const cnt=inWeek.filter(p=>p.ts>=d0&&p.ts<d1).length;
+    const w=workMsIn(d0,d1);
+    const dt=tokIn(d0,d1);
+    const dd=new Date(d0);
+    days+=`<tr style="${cnt?'':'opacity:.45'}">
+      <td>${dayKey(dd)}, ${WD[i]}</td>
+      <td class="num">${cnt}</td><td class="dur">${fdur(w)}</td>
+      <td class="num">${fnum(tokTotal(dt))}</td><td class="num">${fcost(dt.cost)}</td></tr>`;
+  }
+  // prompts grouped by day (collapsed)
+  let groups='';
+  for(let i=0;i<7;i++){ const d0=+addDays(a,i), d1=+addDays(a,i+1);
+    const list=inWeek.filter(p=>p.ts>=d0&&p.ts<d1); if(!list.length) continue;
+    const rows=promptRows(list); if(!rows) continue;
+    groups+=`<details><summary>${dayKey(new Date(d0))}, ${WD[i]} — ${list.length} prompts</summary>
+      <table><tbody>${rows}</tbody></table></details>`;
+  }
+  $('#view').innerHTML=`
+    <div class="cards">
+      <div class="card"><div class="n">${inWeek.length}</div><div class="l">prompts this week</div></div>
+      <div class="card"><div class="n">${fdur(work)}</div><div class="l">active time</div></div>
+      ${tokCards(tokIn(a,b))}
+    </div>
+    <h2>By weekday</h2>
+    <table><thead><tr><th>Day</th><th>Prompts</th><th>Time</th><th>Tokens</th><th>≈ $</th></tr></thead>
+      <tbody>${days}</tbody></table>
+    <h2>Prompts by day</h2>
+    ${groups||'<div class="muted">No prompts this week</div>'}`;
+}
+
+function renderAll(){
+  const q=$('#filter').value.toLowerCase().trim();
+  let view=sessions.filter(r=>!q||r.prompt.toLowerCase().includes(q)||r.project.toLowerCase().includes(q));
+  view.sort((x,y)=>{ let a=x[sortKey],b=y[sortKey];
+    return a<b?-sortDir : a>b?sortDir : 0; });
+  const body=view.map(r=>`<tr>
+    <td class="num">${fdate(r.start)}</td>
+    <td class="num">${fdate(r.end)}</td>
+    <td class="dur">${fdur(r.durMs)}</td>
+    <td><span class="proj">${esc(r.project)}</span></td>
+    <td class="num">${r.msgs}</td>
+    <td class="num">${fnum(r.toktot)}</td>
+    <td class="num">${fcost(r.cost)}</td>
+    <td class="prompt clip">${esc(r.prompt)}</td></tr>`).join('');
+  $('#view').innerHTML=`<div class="scroll"><table><thead><tr>
+    <th class="sortable" data-k="start">Start</th>
+    <th class="sortable" data-k="end">End</th>
+    <th class="sortable" data-k="durMs">Dur.</th>
+    <th class="sortable" data-k="project">Project</th>
+    <th class="sortable" data-k="msgs">Msgs</th>
+    <th class="sortable" data-k="toktot">Tokens</th>
+    <th>≈ $</th>
+    <th class="sortable" data-k="prompt">First prompt</th>
+  </tr></thead><tbody>${body||`<tr><td colspan="8" class="empty">Empty</td></tr>`}</tbody></table></div>`;
+  $('#view').querySelectorAll('th.sortable').forEach(th=>th.onclick=()=>{
+    const k=th.dataset.k; sortDir=(sortKey===k)?-sortDir:1; sortKey=k; renderAll(); });
+}
+
+function render(){
+  renderModelFilter();
+  cards();
+  const showNav = mode!=='all';
+  $('#navGroup').style.display = showNav?'':'none';
+  if(mode==='day'){ $('#period').textContent=period().label; renderDay(); }
+  else if(mode==='week'){ $('#period').textContent=period().label; renderWeek(); }
+  else renderAll();
+}
+
+function showReport(){
+  $('#status').hidden=true; $('#report').hidden=false;
+  $('#reload').hidden=false; $('#csv').hidden=false;
+  if(allPrompts.length){ cursor=new Date(Math.max(...allPrompts.map(p=>+p.ts))); }
+  render();
+}
+
+//// ---- CSV (by session) ----
+function downloadCsv(){
+  const head=['project','session','start','end','duration','prompts','model',
+              'in_tokens','out_tokens','cache_write','cache_read','total_tokens',
+              'est_cost_usd','first_prompt'];
+  const lines=[head.join(',')];
+  for(const r of [...sessions].sort((a,b)=>a.start-b.start)){
+    const cells=[r.project,r.session,fdate(r.start),fdate(r.end),fdur(r.durMs),r.msgs,r.model,
+                 r.tin,r.tout,r.tcw,r.tcr,r.toktot,r.cost.toFixed(4),
+                 r.prompt.replace(/\s+/g,' ')];
+    lines.push(cells.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(','));
+  }
+  const blob=new Blob(['﻿'+lines.join('\r\n')],{type:'text/csv'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob); a.download='claude_report.csv'; a.click();
+}
+
+//// ---- events ----
+async function pickAndLoad(){
+  if(!window.showDirectoryPicker){
+    const inp=document.createElement('input'); inp.type='file'; inp.webkitdirectory=true;
+    inp.onchange=async()=>{ $('#status').textContent='Loading files…';
+      await loadFromFiles(inp.files); showReport(); };
+    inp.click(); return;
+  }
+  try{
+    const handle=await window.showDirectoryPicker({id:'claude-projects', mode:'read'});
+    await idbSet('dir', handle);
+    $('#status').textContent='Loading files…';
+    await loadFromHandle(handle); showReport();
+  }catch(e){ if(e.name!=='AbortError') alert('Error: '+e.message); }
+}
+async function tryRestore(){
+  if(!window.showDirectoryPicker) return;
+  const handle=await idbGet('dir'); if(!handle) return;
+  $('#status').innerHTML='Saved folder: <b>'+esc(handle.name)+
+    '</b><br><br><button id="grant">Connect and show report</button>';
+  $('#grant').onclick=async()=>{
+    let p=await handle.queryPermission({mode:'read'});
+    if(p!=='granted') p=await handle.requestPermission({mode:'read'});
+    if(p!=='granted'){ alert('Access denied'); return; }
+    $('#status').textContent='Loading files…';
+    await loadFromHandle(handle); showReport();
+  };
+}
+
+$('#pick').onclick=pickAndLoad;
+$('#reload').onclick=async()=>{ const h=await idbGet('dir');
+  if(h){ await loadFromHandle(h); render(); } };
+$('#csv').onclick=downloadCsv;
+$('#filter').oninput=render;
+$('#mode').onchange=e=>{ mode=e.target.value; render(); };
+$('#prev').onclick=()=>{ cursor=addDays(cursor,-period().step); render(); };
+$('#next').onclick=()=>{ cursor=addDays(cursor, period().step); render(); };
+$('#latest').onclick=()=>{ if(allPrompts.length)
+  cursor=new Date(Math.max(...allPrompts.map(p=>+p.ts))); render(); };
+
+tryRestore();
+</script>
+</body>
+</html>
