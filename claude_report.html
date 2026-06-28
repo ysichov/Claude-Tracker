@@ -207,8 +207,19 @@ function parseTs(v){ if(!v) return null; const d=new Date(v); return isNaN(d)?nu
 function humanPrompt(rec){
   if(rec.type!=='user') return null;
   const m=rec.message||{}; if(m.role!=='user') return null;
-  const c=m.content; if(typeof c!=='string') return null;
-  const t=c.trim();
+  const c=m.content;
+  let t;
+  if(typeof c==='string') t=c;
+  else if(Array.isArray(c)){
+    // Messages with attachments (screenshots, files) carry content as an
+    // array of blocks: [{type:'image'},…,{type:'text',text:'…'}]. Pull the
+    // human text out of the text blocks. tool_result turns are NOT human
+    // prompts (handled separately in scan()), so skip those.
+    if(c.some(b=>b&&b.type==='tool_result')) return null;
+    t=c.filter(b=>b&&b.type==='text'&&typeof b.text==='string')
+       .map(b=>b.text).join('\n');
+  } else return null;
+  t=(t||'').trim();
   if(!t||t[0]==='<'||t.startsWith('Caveat:')||t.startsWith('[Request interrupted'))
     return null;
   return t;
@@ -334,6 +345,10 @@ function fdur(ms){ const s=Math.round(ms/1000); const h=Math.floor(s/3600),
   m=Math.floor(s%3600/60), ss=s%60;
   if(h) return `${h}h ${pad(m)}m`; if(m) return `${m}m ${pad(ss)}s`; return `${ss}s`; }
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))
+// short one-line preview for list rows; full text still shows in the modal
+const PROMPT_MAX=200;
+const clipPrompt=t=>{ t=String(t).replace(/\s+/g,' ').trim();
+  return t.length>PROMPT_MAX ? t.slice(0,PROMPT_MAX)+'…' : t; };
 
 //// ---- minimal markdown → html ----
 function md(raw){
@@ -583,7 +598,7 @@ function promptRows(list){
       <td class="num" title="${esc(p.model||'')}">${esc(shortModel(p.model))}</td>
       <td class="num" title="in ${p.tin}, out ${p.tout}, cache write ${p.tcw}, cache read ${p.tcr}">${fnum(p.toktot)}</td>
       <td class="num">${fcost(p.cost)}</td>
-      <td class="prompt clip">${esc(p.text)}</td></tr>`).join('');
+      <td class="prompt clip">${esc(clipPrompt(p.text))}</td></tr>`).join('');
 }
 
 function renderDay(){
@@ -653,7 +668,7 @@ function renderAll(){
     <td class="num">${r.msgs}</td>
     <td class="num">${fnum(r.toktot)}</td>
     <td class="num">${fcost(r.cost)}</td>
-    <td class="prompt clip">${esc(r.prompt)}</td></tr>`).join('');
+    <td class="prompt clip">${esc(clipPrompt(r.prompt))}</td></tr>`).join('');
   $('#view').innerHTML=`<div class="scroll"><table><thead><tr>
     <th class="sortable" data-k="start">Start</th>
     <th class="sortable" data-k="end">End</th>
