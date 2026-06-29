@@ -213,7 +213,14 @@ function parseTs(v){ if(!v) return null; const d=new Date(v); return isNaN(d)?nu
 function humanPrompt(rec){
   if(rec.type!=='user') return null;
   const m=rec.message||{}; if(m.role!=='user') return null;
-  const c=m.content; if(typeof c!=='string') return null;
+  let c=m.content;
+  // newer logs store human prompts as an array of blocks (text + pasted images);
+  // tool_result continuations also use arrays — those are NOT human prompts
+  if(Array.isArray(c)){
+    if(c.some(b=>b&&b.type==='tool_result')) return null;
+    c=c.filter(b=>b&&b.type==='text'&&b.text).map(b=>b.text).join('\n');
+  }
+  if(typeof c!=='string') return null;
   const t=c.trim();
   if(!t||t[0]==='<'||t.startsWith('Caveat:')||t.startsWith('[Request interrupted'))
     return null;
