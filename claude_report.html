@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="utf-8">
@@ -164,6 +164,11 @@
         <button class="arrow" id="next" title="Next">›</button>
         <button class="sec" id="latest">Latest</button>
       </span>
+      <label>Project:
+        <select id="projFilter" onchange="_selectedProject=this.value; render()">
+          <option value="">All projects</option>
+        </select>
+      </label>
       <input type="search" id="filter" placeholder="Filter…" style="margin-left:auto">
     </div>
 
@@ -200,6 +205,7 @@ async function idbSet(k,v){const db=await idb();return new Promise((res,rej)=>{
 let sessions=[], allPrompts=[], allUsage=[];
 let mode='day', cursor=new Date();
 let sortKey='start', sortDir=1;
+let _selectedProject='';
 const $=s=>document.querySelector(s);
 
 //// ---- parsing ----
@@ -207,19 +213,8 @@ function parseTs(v){ if(!v) return null; const d=new Date(v); return isNaN(d)?nu
 function humanPrompt(rec){
   if(rec.type!=='user') return null;
   const m=rec.message||{}; if(m.role!=='user') return null;
-  const c=m.content;
-  let t;
-  if(typeof c==='string') t=c;
-  else if(Array.isArray(c)){
-    // Messages with attachments (screenshots, files) carry content as an
-    // array of blocks: [{type:'image'},…,{type:'text',text:'…'}]. Pull the
-    // human text out of the text blocks. tool_result turns are NOT human
-    // prompts (handled separately in scan()), so skip those.
-    if(c.some(b=>b&&b.type==='tool_result')) return null;
-    t=c.filter(b=>b&&b.type==='text'&&typeof b.text==='string')
-       .map(b=>b.text).join('\n');
-  } else return null;
-  t=(t||'').trim();
+  const c=m.content; if(typeof c!=='string') return null;
+  const t=c.trim();
   if(!t||t[0]==='<'||t.startsWith('Caveat:')||t.startsWith('[Request interrupted'))
     return null;
   return t;
@@ -345,10 +340,6 @@ function fdur(ms){ const s=Math.round(ms/1000); const h=Math.floor(s/3600),
   m=Math.floor(s%3600/60), ss=s%60;
   if(h) return `${h}h ${pad(m)}m`; if(m) return `${m}m ${pad(ss)}s`; return `${ss}s`; }
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))
-// short one-line preview for list rows; full text still shows in the modal
-const PROMPT_MAX=200;
-const clipPrompt=t=>{ t=String(t).replace(/\s+/g,' ').trim();
-  return t.length>PROMPT_MAX ? t.slice(0,PROMPT_MAX)+'…' : t; };
 
 //// ---- minimal markdown → html ----
 function md(raw){
@@ -574,13 +565,14 @@ function period(){
 
 //// ---- renderers ----
 function cards(){
-  const total=sessions.reduce((s,r)=>s+r.durMs,0);
+  const {prompts:fp, sess:fs}=filteredData();
+  const total=fs.reduce((s,r)=>s+r.durMs,0);
   const t={tin:0,tout:0,tcw:0,tcr:0,cost:0};
-  for(const s of sessions){ t.tin+=s.tin; t.tout+=s.tout; t.tcw+=s.tcw; t.tcr+=s.tcr; t.cost+=s.cost; }
+  for(const s of fs){ t.tin+=s.tin; t.tout+=s.tout; t.tcw+=s.tcw; t.tcr+=s.tcr; t.cost+=s.cost; }
   $('#cards').innerHTML=`
-    <div class="card"><div class="n">${sessions.length}</div><div class="l">sessions</div></div>
+    <div class="card"><div class="n">${fs.length}</div><div class="l">sessions</div></div>
     <div class="card"><div class="n">${fdur(total)}</div><div class="l">total time</div></div>
-    <div class="card"><div class="n">${allPrompts.length}</div><div class="l">prompts</div></div>
+    <div class="card"><div class="n">${fp.length}</div><div class="l">prompts</div></div>
     <div class="card"><div class="n">${fnum(tokTotal(t))}</div><div class="l">tokens total</div></div>
     <div class="card"><div class="n">${fcost(t.cost)}</div><div class="l">≈ cost</div></div>`;
 }
@@ -598,19 +590,22 @@ function promptRows(list){
       <td class="num" title="${esc(p.model||'')}">${esc(shortModel(p.model))}</td>
       <td class="num" title="in ${p.tin}, out ${p.tout}, cache write ${p.tcw}, cache read ${p.tcr}">${fnum(p.toktot)}</td>
       <td class="num">${fcost(p.cost)}</td>
-      <td class="prompt clip">${esc(clipPrompt(p.text))}</td></tr>`).join('');
+      <td class="prompt clip">${esc(p.text)}</td></tr>`).join('');
 }
 
 function renderDay(){
   const {a,b}=period();
-  const list=allPrompts.filter(p=>p.ts>=a&&p.ts<b);
-  const work=workMsIn(a,b);
+  const {prompts:fp, usage:fu}=filteredData();
+  const list=fp.filter(p=>p.ts>=a&&p.ts<b);
+  const work=activeMs(list.map(p=>+p.ts).sort((x,y)=>x-y));
+  const tokInF=(a,b)=>{ const t={tin:0,tout:0,tcw:0,tcr:0,cost:0};
+    for(const u of fu){ if(u.ts>=a&&u.ts<b){t.tin+=u.i;t.tout+=u.o;t.tcw+=u.cw;t.tcr+=u.cr;t.cost+=u.cost;} } return t; };
   const rows=promptRows(list);
   $('#view').innerHTML=`
     <div class="cards">
       <div class="card"><div class="n">${list.length}</div><div class="l">prompts today</div></div>
       <div class="card"><div class="n">${fdur(work)}</div><div class="l">active time</div></div>
-      ${tokCards(tokIn(a,b))}
+      ${tokCards(tokInF(a,b))}
     </div>
     <div class="scroll"><table>
       <thead><tr><th style="width:55px">Start</th><th style="width:55px">End</th><th style="width:65px">Dur.</th><th style="width:120px">Project</th><th style="width:80px">Model</th><th style="width:75px">Tokens</th><th style="width:55px">≈ $</th><th>Prompt</th></tr></thead>
@@ -620,14 +615,18 @@ function renderDay(){
 
 function renderWeek(){
   const {a,b}=period();
-  const work=workMsIn(a,b);
-  const inWeek=allPrompts.filter(p=>p.ts>=a&&p.ts<b);
+  const {prompts:fp, usage:fu}=filteredData();
+  const tokInF=(a,b)=>{ const t={tin:0,tout:0,tcw:0,tcr:0,cost:0};
+    for(const u of fu){ if(u.ts>=a&&u.ts<b){t.tin+=u.i;t.tout+=u.o;t.tcw+=u.cw;t.tcr+=u.cr;t.cost+=u.cost;} } return t; };
+  const workF=(a,b)=>activeMs(fp.filter(p=>p.ts>=a&&p.ts<b).map(p=>+p.ts).sort((x,y)=>x-y));
+  const work=workF(a,b);
+  const inWeek=fp.filter(p=>p.ts>=a&&p.ts<b);
   // breakdown by day
   let days='';
   for(let i=0;i<7;i++){ const d0=+addDays(a,i), d1=+addDays(a,i+1);
     const cnt=inWeek.filter(p=>p.ts>=d0&&p.ts<d1).length;
-    const w=workMsIn(d0,d1);
-    const dt=tokIn(d0,d1);
+    const w=workF(d0,d1);
+    const dt=tokInF(d0,d1);
     const dd=new Date(d0);
     days+=`<tr style="${cnt?'':'opacity:.45'}">
       <td>${dayKey(dd)}, ${WD[i]}</td>
@@ -646,7 +645,7 @@ function renderWeek(){
     <div class="cards">
       <div class="card"><div class="n">${inWeek.length}</div><div class="l">prompts this week</div></div>
       <div class="card"><div class="n">${fdur(work)}</div><div class="l">active time</div></div>
-      ${tokCards(tokIn(a,b))}
+      ${tokCards(tokInF(a,b))}
     </div>
     <h2>By weekday</h2>
     <table><thead><tr><th>Day</th><th>Prompts</th><th>Time</th><th>Tokens</th><th>≈ $</th></tr></thead>
@@ -657,7 +656,8 @@ function renderWeek(){
 
 function renderAll(){
   const q=$('#filter').value.toLowerCase().trim();
-  let view=sessions.filter(r=>!q||r.prompt.toLowerCase().includes(q)||r.project.toLowerCase().includes(q));
+  const {sess:fs}=filteredData();
+  let view=fs.filter(r=>!q||r.prompt.toLowerCase().includes(q)||r.project.toLowerCase().includes(q));
   view.sort((x,y)=>{ let a=x[sortKey],b=y[sortKey];
     return a<b?-sortDir : a>b?sortDir : 0; });
   const body=view.map(r=>`<tr>
@@ -668,7 +668,7 @@ function renderAll(){
     <td class="num">${r.msgs}</td>
     <td class="num">${fnum(r.toktot)}</td>
     <td class="num">${fcost(r.cost)}</td>
-    <td class="prompt clip">${esc(clipPrompt(r.prompt))}</td></tr>`).join('');
+    <td class="prompt clip">${esc(r.prompt)}</td></tr>`).join('');
   $('#view').innerHTML=`<div class="scroll"><table><thead><tr>
     <th class="sortable" data-k="start">Start</th>
     <th class="sortable" data-k="end">End</th>
@@ -683,7 +683,28 @@ function renderAll(){
     const k=th.dataset.k; sortDir=(sortKey===k)?-sortDir:1; sortKey=k; renderAll(); });
 }
 
+function renderProjFilter(){
+  const sel=$('#projFilter');
+  const projects=[...new Set(sessions.map(s=>s.project))].sort();
+  // rebuild options keeping current selection
+  const cur=sel.value;
+  sel.innerHTML='<option value="">All projects</option>'+
+    projects.map(p=>`<option value="${esc(p)}"${p===cur?' selected':''}>${esc(p)}</option>`).join('');
+  if(!projects.includes(cur)) { _selectedProject=''; sel.value=''; }
+}
+
+// returns filtered arrays based on _selectedProject
+function filteredData(){
+  if(!_selectedProject) return {prompts:allPrompts, usage:allUsage, sess:sessions};
+  return {
+    prompts: allPrompts.filter(p=>p.project===_selectedProject),
+    usage:   allUsage.filter(u=>u.project===_selectedProject),
+    sess:    sessions.filter(s=>s.project===_selectedProject),
+  };
+}
+
 function render(){
+  renderProjFilter();
   renderModelFilter();
   cards();
   const showNav = mode!=='all';
