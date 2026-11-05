@@ -28,6 +28,21 @@
     color:var(--text);border-radius:8px;padding:8px 12px;font-size:14px}
   input[type=search]{min-width:220px}
   .path{font:12px ui-monospace,Consolas,monospace;color:var(--muted)}
+  .srcwrap{position:relative;margin-right:auto}
+  .src-panel{position:absolute;top:calc(100% + 6px);left:0;z-index:50;background:var(--panel);
+    border:1px solid var(--line);border-radius:10px;padding:8px;min-width:260px;
+    box-shadow:0 8px 24px rgba(0,0,0,.30)}
+  .src-list{display:flex;flex-direction:column;gap:2px;max-height:320px;overflow:auto}
+  .src-row{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;cursor:pointer}
+  .src-row:hover{background:var(--bg)}
+  .src-row input{cursor:pointer}
+  .src-name{flex:1;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .src-mini{background:transparent;border:0;color:var(--muted);cursor:pointer;font-size:13px;
+    padding:2px 5px;border-radius:6px}
+  .src-mini:hover{background:var(--line);color:var(--text)}
+  .src-actions{display:flex;gap:6px;margin-top:8px;border-top:1px solid var(--line);padding-top:8px}
+  .src-actions button{font-size:13px;padding:6px 10px}
+  .src-empty{color:var(--muted);padding:8px 8px 4px}
   .wrap{padding:18px 22px}
   .cards{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:18px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
@@ -134,17 +149,24 @@
 <body>
 <header>
   <h1>📊 Claude Session Report</h1>
-  <span class="path" id="pathHint">C:\Users\your_User\.claude\projects</span>
-  <button id="pick">Connect folder</button>
-  <button class="sec" id="reload" title="Reload" hidden>↻ Refresh</button>
+  <div class="srcwrap">
+    <button class="sec" id="srcToggle">Sources ▾</button>
+    <div id="srcPanel" class="src-panel" hidden></div>
+  </div>
+  <button class="sec" id="reload" title="Reload selected sources">↻ Refresh</button>
   <button class="sec" id="csv" hidden>Download CSV</button>
 </header>
 
 <div class="wrap">
   <div id="status" class="empty">
-    Click «Connect folder» and select the <b>projects</b> folder<br>
-    (<span class="path">C:\Users\your_User\.claude\projects</span>).<br><br>
-    <span class="muted">The folder will be remembered — next time one click is enough.</span>
+    Click «+ Add source» and register one or more log folders. Each is saved and
+    loaded together; use the <b>Source</b> filter to view one at a time.<br><br>
+    <span class="muted">Supported folders:</span><br>
+    • <b>Claude logs</b> — <span class="path">C:\Users\your_User\.claude\projects</span> (<code>*.jsonl</code>)<br>
+    • <b>context-lens</b> — <span class="path">C:\Users\your_User\.context-lens\data</span>
+      (<code>state.jsonl</code> with system prompts &amp; tools, and <code>.lhar</code> exports)<br>
+    • any other folder of Claude-style <code>*.jsonl</code> logs (e.g. abap-ai)<br><br>
+    <span class="muted">Sources are remembered — next time one click loads them all.</span>
   </div>
 
   <div id="report" hidden>
@@ -164,6 +186,11 @@
         <button class="arrow" id="next" title="Next">›</button>
         <button class="sec" id="latest">Latest</button>
       </span>
+      <label id="srcFilterWrap" style="display:none">Source:
+        <select id="srcFilter" onchange="_selectedSource=this.value; _selectedProject=''; render()">
+          <option value="">All sources</option>
+        </select>
+      </label>
       <label>Project:
         <select id="projFilter" onchange="_selectedProject=this.value; render()">
           <option value="">All projects</option>
@@ -206,6 +233,10 @@ let sessions=[], allPrompts=[], allUsage=[];
 let mode='day', cursor=new Date();
 let sortKey='start', sortDir=1;
 let _selectedProject='';
+let _selectedSource='';
+// small source badge shown in tables only when viewing across multiple sources
+const srcBadge=x=> (x.source && !_selectedSource)
+  ? `<span class="muted" style="font-size:11px">${x.source.replace(/[&<>]/g,'')} · </span>` : '';
 const $=s=>document.querySelector(s);
 
 //// ---- parsing ----
@@ -291,44 +322,200 @@ function scan(text, project, session, seen){
           tin,tout,tcw,tcr, tcost, model};
 }
 
+//// ---- context-lens parsing ----
+// Two lens formats are supported in addition to the normal .claude/projects logs:
+//   1. state.jsonl  — the analysis app's DB: conversations + entries with the FULL
+//      contextInfo (system prompts, tool definitions, message history) and metrics.
+//   2. *.lhar        — portable per-session export (JSONL): per-request metrics,
+//      context composition, security and timings, but no prompt/system text.
+// Both map onto the same session/prompt/usage model used by the normal logs.
+
+// extract readable text from a lens message (contentBlocks, JSON-encoded blocks, or plain string)
+function lensMsgText(m){
+  if(!m) return '';
+  const cb=m.contentBlocks;
+  if(Array.isArray(cb)) return cb.filter(b=>b&&b.type==='text'&&b.text).map(b=>b.text).join('\n');
+  let c=m.content;
+  if(Array.isArray(c)) return c.filter(b=>b&&b.type==='text'&&b.text).map(b=>b.text).join('\n');
+  if(typeof c==='string'){
+    const t=c.trim();
+    if(t[0]==='['||t[0]==='{'){ try{ const a=JSON.parse(t);
+      if(Array.isArray(a)) return a.filter(b=>b&&b.type==='text'&&b.text).map(b=>b.text).join('\n');
+    }catch{} }
+    return c;
+  }
+  return '';
+}
+// build the collapsible detail sections shown in the modal for a state.jsonl entry
+function lensEntryReplies(d,ci){
+  const out=[]; const u=d.usage||{}; const tm=d.timings||{};
+  const L=[];
+  L.push('model: '+(d.responseModel||ci.model||'—')+(d.stopReason?'  · stop: '+d.stopReason:''));
+  L.push(`tokens: in ${u.inputTokens||0} · out ${u.outputTokens||0} · cache read ${u.cacheReadTokens||0} · cache write ${u.cacheWriteTokens||0} · thinking ${u.thinkingTokens||0}`);
+  if(d.costUsd!=null) L.push('cost: $'+(+d.costUsd).toFixed(4));
+  if(ci.totalTokens!=null) L.push(`context: ${ci.messagesTokens||0} msg + ${ci.systemTokens||0} sys + ${ci.toolsTokens||0} tools = ${ci.totalTokens} tokens`+(d.contextLimit?` / ${d.contextLimit}`:''));
+  if(tm.totalMs!=null||tm.total_ms!=null) L.push('timing: '+(tm.totalMs??tm.total_ms)+'ms');
+  if(d.httpStatus) L.push('http: '+d.httpStatus+(d.targetUrl?'  '+d.targetUrl:''));
+  out.push({type:'section', label:'Metrics', text:L.join('\n')});
+  const sp=ci.systemPrompts||[];
+  if(sp.length) out.push({type:'section', label:`System prompt (${sp.length})`,
+    text:sp.map((p,i)=>`# system[${i}]\n`+(p.content||'')).join('\n\n')});
+  const tools=ci.tools||[];
+  if(tools.length) out.push({type:'section', label:`Tools (${tools.length})`,
+    text:tools.map(t=>`• ${t.name}${t.description?': '+String(t.description).split('\n')[0].slice(0,100):''}`).join('\n')});
+  const msgs=ci.messages||[];
+  if(msgs.length) out.push({type:'section', label:`Messages (${msgs.length})`,
+    text:msgs.map(m=>`[${m.role}] (${m.tokens||0} tok)\n`+lensMsgText(m)).join('\n\n──────\n')});
+  const sec=d.securityAlerts||[];
+  if(sec.length) out.push({type:'section', label:`⚠ Security (${sec.length})`,
+    text:sec.map(a=>'• '+(a.message||a.type||JSON.stringify(a))).join('\n')});
+  return out;
+}
+function newLensConv(id){return {id,label:'',source:'',sessionId:'',items:[],usage:[],
+  start:null,end:null,tin:0,tout:0,tcw:0,tcr:0,tcost:0,model:''};}
+// parse state.jsonl -> array of session records (one per conversation)
+function scanLensState(text){
+  const convs=new Map();
+  for(const line of text.split('\n')){
+    const s=line.trim(); if(!s) continue;
+    let rec; try{rec=JSON.parse(s);}catch{continue;}
+    const d=rec.data||{};
+    if(rec.type==='conversation'){
+      if(!d.id) continue;
+      const c=convs.get(d.id)||newLensConv(d.id);
+      if(d.label) c.label=d.label; if(d.source) c.source=d.source;
+      if(d.sessionId) c.sessionId=d.sessionId;
+      convs.set(d.id,c);
+    } else if(rec.type==='entry'){
+      const cid=d.conversationId||'_';
+      const c=convs.get(cid)||newLensConv(cid);
+      const ts=parseTs(d.timestamp)||new Date();
+      const ci=d.contextInfo||{}; const u=d.usage||{};
+      const i=u.inputTokens||0, o=u.outputTokens||0,
+            cw=u.cacheWriteTokens||0, cr=u.cacheReadTokens||0;
+      const mdl=d.responseModel||ci.model||'';
+      const cost=(typeof d.costUsd==='number'&&d.costUsd>0)?d.costUsd:costEvent(mdl,i,o,cw,cr);
+      const msgs=ci.messages||[];
+      const lastUser=[...msgs].reverse().find(m=>m&&m.role==='user');
+      let ptext=(lastUser?lensMsgText(lastUser):'').trim()
+        .split('\n').filter(x=>!x.trim().startsWith('<system-reminder')).join('\n').trim();
+      if(!ptext) ptext=c.label||('lens entry '+(d.id??''));
+      c.items.push({ts, text:ptext, tin:i,tout:o,tcw:cw,tcr:cr, cost, model:mdl,
+                    replies:lensEntryReplies(d,ci)});
+      c.usage.push({ts,i,o,cw,cr,cost,model:mdl});
+      c.tin+=i;c.tout+=o;c.tcw+=cw;c.tcr+=cr;c.tcost+=cost; if(mdl)c.model=mdl;
+      if(!c.start||ts<c.start)c.start=ts; if(!c.end||ts>c.end)c.end=ts;
+      convs.set(cid,c);
+    }
+  }
+  const out=[];
+  for(const c of convs.values()){
+    if(!c.items.length) continue;
+    const src=(c.source||'').replace(/[:\\\/]+$/,'');
+    out.push({ project:'lens'+(src?'/'+src:''),
+      session:c.label?`${c.label} · ${c.id.slice(0,8)}`:c.id.slice(0,12),
+      start:c.start, end:c.end||c.start, durMs:(c.end||c.start)-c.start,
+      msgs:c.items.length, prompt:c.items[0].text, items:c.items, usage:c.usage,
+      tin:c.tin,tout:c.tout,tcw:c.tcw,tcr:c.tcr, tcost:c.tcost, model:c.model });
+  }
+  return out;
+}
+// build modal detail sections for a .lhar entry (metrics only — no prompt text)
+function lharReplies(rec){
+  const g=rec.gen_ai||{},u=g.usage||{},ux=rec.usage_ext||{},cl=rec.context_lens||{},
+        tm=rec.timings||{},tr=rec.transfer||{},http=rec.http||{};
+  const L=[];
+  L.push(`${http.method||''} ${http.url||''} → ${http.status_code||''}`);
+  L.push(`tokens: in ${u.input_tokens||0} · out ${u.output_tokens||0} · total ${u.total_tokens||0}`);
+  L.push(`cache: read ${ux.cache_read_tokens||0} · write ${ux.cache_write_tokens||0} · thinking ${ux.thinking_tokens||0}`);
+  if(ux.cost_usd!=null) L.push('cost: $'+(+ux.cost_usd).toFixed(4));
+  if(cl.window_size!=null) L.push(`context: ${cl.messages_tokens||0} msg + ${cl.system_tokens||0} sys + ${cl.tools_tokens||0} tools / ${cl.window_size} (${cl.utilization}%)`);
+  if(tm.total_ms!=null) L.push(`timing: total ${tm.total_ms}ms · ${tm.tokens_per_second||0} tok/s`);
+  if(tr.request_bytes!=null) L.push(`transfer: up ${tr.request_bytes} / down ${tr.response_bytes} bytes`);
+  const out=[{type:'section',label:'Metrics',text:L.join('\n')}];
+  const comp=cl.composition||[];
+  if(comp.length) out.push({type:'section',label:'Composition',
+    text:comp.map(c=>`${c.category}: ${c.tokens} tok (${c.pct}%)`).join('\n')});
+  const sec=cl.security&&cl.security.summary;
+  if(sec&&(sec.high||sec.medium||sec.info)){
+    const al=(cl.security.alerts||[]).map(a=>'• '+(a.message||JSON.stringify(a))).join('\n');
+    out.push({type:'section',label:`⚠ Security (h${sec.high||0}/m${sec.medium||0})`,text:al||'(summary only)'});
+  }
+  return out;
+}
+// parse a .lhar export -> single session record
+function scanLhar(text, fileName){
+  let sess=null,items=[],usage=[],start=null,end=null,tin=0,tout=0,tcw=0,tcr=0,tcost=0,model='';
+  for(const line of text.split('\n')){
+    const s=line.trim(); if(!s) continue;
+    let rec; try{rec=JSON.parse(s);}catch{continue;}
+    if(rec.type==='session'){ sess=rec; if(rec.model)model=rec.model; continue; }
+    if(rec.type!=='entry') continue;
+    const ts=parseTs(rec.timestamp)||new Date();
+    if(!start||ts<start)start=ts; if(!end||ts>end)end=ts;
+    const g=rec.gen_ai||{},u=g.usage||{},ux=rec.usage_ext||{};
+    const mdl=(g.response&&g.response.model)||(g.request&&g.request.model)||model||'';
+    const i=u.input_tokens||0,o=u.output_tokens||0,cw=ux.cache_write_tokens||0,cr=ux.cache_read_tokens||0;
+    const cost=(typeof ux.cost_usd==='number'&&ux.cost_usd>0)?ux.cost_usd:costEvent(mdl,i,o,cw,cr);
+    tin+=i;tout+=o;tcw+=cw;tcr+=cr;tcost+=cost; if(mdl)model=mdl;
+    const cl=rec.context_lens||{},http=rec.http||{}, util=cl.utilization;
+    const label=`${shortModel(mdl)||'?'} · ${http.status_code||''} · ctx ${util!=null?util+'%':'—'}`;
+    items.push({ts,text:label,tin:i,tout:o,tcw:cw,tcr:cr,cost,model:mdl,replies:lharReplies(rec)});
+    usage.push({ts,i,o,cw,cr,cost,model:mdl});
+  }
+  if(!start) return null;
+  const tool=(sess&&sess.tool)||'claude', trace=(sess&&sess.trace_id)||fileName;
+  return {project:'lens/'+tool, session:String(trace).slice(0,12), start, end:end||start,
+    durMs:(end||start)-start, msgs:items.length, prompt:items[0]?items[0].text:'(lens session)',
+    items,usage,tin,tout,tcw,tcr,tcost,model};
+}
+
 //// ---- loading ----
+// route one file to the right parser by name; returns array of session records to ingest
+async function parseLogText(name, text, project, seen){
+  if(name==='state.jsonl') return scanLensState(text);
+  if(name.endsWith('.lhar')){ const r=scanLhar(text, name.replace(/\.lhar$/,'')); return r?[r]:[]; }
+  const r=scan(text, project, name.replace(/\.jsonl$/,''), seen); return r?[r]:[];
+}
 async function* walk(dir, prefix=''){
   for await (const [name,h] of dir.entries()){
-    if(h.kind==='file' && name.endsWith('.jsonl')) yield {path:prefix+name, handle:h};
+    if(h.kind==='file' && (name.endsWith('.jsonl')||name.endsWith('.lhar')))
+      yield {path:prefix+name, handle:h};
     else if(h.kind==='directory') yield* walk(h, prefix+name+'/');
   }
 }
 function ingest(r){
-  sessions.push({project:r.project, session:r.session, start:r.start, end:r.end,
+  const src=r.source||'';
+  sessions.push({source:src, project:r.project, session:r.session, start:r.start, end:r.end,
                  durMs:r.durMs, msgs:r.msgs, prompt:r.prompt,
                  tin:r.tin, tout:r.tout, tcw:r.tcw, tcr:r.tcr,
                  toktot:r.tin+r.tout+r.tcw+r.tcr, cost:r.tcost, model:r.model});
   for(const it of r.items)
-    allPrompts.push({ts:it.ts, text:it.text, project:r.project, session:r.session,
+    allPrompts.push({ts:it.ts, text:it.text, source:src, project:r.project, session:r.session,
       tin:it.tin, tout:it.tout, tcw:it.tcw, tcr:it.tcr,
       toktot:it.tin+it.tout+it.tcw+it.tcr, cost:it.cost, model:it.model||r.model||'', replies:it.replies||[]});
   for(const u of r.usage)
-    allUsage.push({...u, project:r.project, session:r.session});
+    allUsage.push({...u, source:src, project:r.project, session:r.session});
 }
-async function loadFromHandle(dirHandle){
-  sessions=[]; allPrompts=[]; allUsage=[]; const seen=new Set();
+// walk one registered source directory and ingest, tagging every record with the source label
+async function ingestHandle(dirHandle, source, seen){
   for await (const f of walk(dirHandle)){
     const parts=f.path.split('/');
+    const name=parts[parts.length-1];
     const project = parts.length>1 ? parts[parts.length-2] : dirHandle.name;
-    const session = parts[parts.length-1].replace(/\.jsonl$/,'');
-    const r=scan(await (await f.handle.getFile()).text(), project, session, seen);
-    if(r) ingest(r);
+    const text=await (await f.handle.getFile()).text();
+    for(const r of await parseLogText(name, text, project, seen)){ r.source=source; ingest(r); }
   }
 }
+// fallback for browsers without showDirectoryPicker: single ad-hoc folder, no registry
 async function loadFromFiles(fileList){
   sessions=[]; allPrompts=[]; allUsage=[]; const seen=new Set();
   for(const file of fileList){
-    if(!file.name.endsWith('.jsonl')) continue;
+    const name=file.name;
+    if(name!=='state.jsonl' && !name.endsWith('.jsonl') && !name.endsWith('.lhar')) continue;
     const rel=(file.webkitRelativePath||file.name).split('/');
     const project = rel.length>1 ? rel[rel.length-2] : 'project';
-    const session = file.name.replace(/\.jsonl$/,'');
-    const r=scan(await file.text(), project, session, seen);
-    if(r) ingest(r);
+    for(const r of await parseLogText(name, await file.text(), project, seen)){ r.source=''; ingest(r); }
   }
 }
 
@@ -472,6 +659,14 @@ function openPrompt(idx){
             `<span class="result-label">Result</span>`+
             `<span class="result-preview">${esc(preview)}</span>`+
             `</summary><div class="result-body">${esc(txt)}</div></details>`;
+    } else if(r.type==='section'){
+      // context-lens detail block (metrics, system prompt, tools, messages, security)
+      const txt=String(r.text||'');
+      const preview=txt.slice(0,120).replace(/\n/g,' ');
+      body+=`<details class="tool-result"><summary>`+
+            `<span class="result-label">${esc(r.label||'')}</span>`+
+            `<span class="result-preview">${esc(preview)}</span>`+
+            `</summary><div class="result-body">${esc(txt)}</div></details>`;
     } else
       body+=`<div class="bubble reply"><div class="reply-md">${md(r.text)}</div></div>`;
   }
@@ -523,26 +718,34 @@ function withDur(list){
 // rates $/1M tokens: [input, output, cache write (5m), cache read]
 // public API prices; <synthetic> and unknown models = 0
 const PRICES={
-  'claude-opus-4-8'           : {in:15,  out:75, cw:18.75, cr:1.5},
+  'claude-fable-5'            : {in:10,  out:50, cw:12.5,  cr:1.0},
+  'claude-mythos-5'           : {in:10,  out:50, cw:12.5,  cr:1.0},
+  'claude-opus-4-8'           : {in:5,   out:25, cw:6.25,  cr:0.50},
+  'claude-opus-4-7'           : {in:5,   out:25, cw:6.25,  cr:0.50},
+  'claude-opus-4-6'           : {in:5,   out:25, cw:6.25,  cr:0.50},
+  'claude-sonnet-5'           : {in:3,   out:15, cw:3.75,  cr:0.30},
   'claude-sonnet-4-6'         : {in:3,   out:15, cw:3.75,  cr:0.30},
+  'claude-haiku-4-5'          : {in:1,   out:5,  cw:1.25,  cr:0.10},
   'claude-haiku-4-5-20251001' : {in:1,   out:5,  cw:1.25,  cr:0.10},
 };
 function priceFor(model){
   if(PRICES[model]) return PRICES[model];
-  // fallback match by model family
+  // fallback match by model family — always price recognized Anthropic models,
+  // even when the exact dated/aliased ID isn't in the table above
+  if(/fable|mythos/.test(model)) return PRICES['claude-fable-5'];
   if(/opus/.test(model))   return PRICES['claude-opus-4-8'];
-  if(/sonnet/.test(model)) return PRICES['claude-sonnet-4-6'];
-  if(/haiku/.test(model))  return PRICES['claude-haiku-4-5-20251001'];
+  if(/sonnet/.test(model)) return PRICES['claude-sonnet-5'];
+  if(/haiku/.test(model))  return PRICES['claude-haiku-4-5'];
   return {in:0,out:0,cw:0,cr:0}; // <synthetic> etc.
 }
 function costEvent(model,i,o,cw,cr){ const p=priceFor(model);
   return (i*p.in + o*p.out + cw*p.cw + cr*p.cr)/1e6; }
 const fnum=n=> n>=1e6 ? (n/1e6).toFixed(2)+'M' : n>=1e3 ? (n/1e3).toFixed(1)+'k' : String(n);
-const fcost=v=> '$'+(v<10 ? v.toFixed(2) : v.toFixed(0));
+const fcost=v=> '$'+(v<0.01&&v>0 ? v.toFixed(4) : v<10 ? v.toFixed(2) : v.toFixed(0));
 // short model label, e.g. claude-opus-4-8 -> Opus 4.8
 function shortModel(m){
   if(!m) return '';
-  const fam=/opus/i.test(m)?'Opus':/sonnet/i.test(m)?'Sonnet':/haiku/i.test(m)?'Haiku':null;
+  const fam=/fable/i.test(m)?'Fable':/mythos/i.test(m)?'Mythos':/opus/i.test(m)?'Opus':/sonnet/i.test(m)?'Sonnet':/haiku/i.test(m)?'Haiku':null;
   if(!fam) return m.replace(/^claude-/,'');
   const nums=(m.match(/(\d+)-(\d+)/)||[]);
   return nums.length ? `${fam} ${nums[1]}.${nums[2]}` : fam;
@@ -593,7 +796,7 @@ function promptRows(list){
       <td class="num">${ftime(p.ts)}</td>
       <td class="num">${ftime(p.endTs)}</td>
       <td class="num">${fdur(p.dur)}</td>
-      <td><span class="proj">${esc(p.project)}</span></td>
+      <td>${srcBadge(p)}<span class="proj">${esc(p.project)}</span></td>
       <td class="num" title="${esc(p.model||'')}">${esc(shortModel(p.model))}</td>
       <td class="num" title="in ${p.tin}, out ${p.tout}, cache write ${p.tcw}, cache read ${p.tcr}">${fnum(p.toktot)}</td>
       <td class="num">${fcost(p.cost)}</td>
@@ -671,7 +874,7 @@ function renderAll(){
     <td class="num">${fdate(r.start)}</td>
     <td class="num">${fdate(r.end)}</td>
     <td class="dur">${fdur(r.durMs)}</td>
-    <td><span class="proj">${esc(r.project)}</span></td>
+    <td>${srcBadge(r)}<span class="proj">${esc(r.project)}</span></td>
     <td class="num">${r.msgs}</td>
     <td class="num">${fnum(r.toktot)}</td>
     <td class="num">${fcost(r.cost)}</td>
@@ -692,7 +895,8 @@ function renderAll(){
 
 function renderProjFilter(){
   const sel=$('#projFilter');
-  const projects=[...new Set(sessions.map(s=>s.project))].sort();
+  const pool=_selectedSource ? sessions.filter(s=>s.source===_selectedSource) : sessions;
+  const projects=[...new Set(pool.map(s=>s.project))].sort();
   // rebuild options keeping current selection
   const cur=sel.value;
   sel.innerHTML='<option value="">All projects</option>'+
@@ -700,17 +904,21 @@ function renderProjFilter(){
   if(!projects.includes(cur)) { _selectedProject=''; sel.value=''; }
 }
 
-// returns filtered arrays based on _selectedProject
+// returns filtered arrays based on the Source and Project selectors
 function filteredData(){
-  if(!_selectedProject) return {prompts:allPrompts, usage:allUsage, sess:sessions};
+  const ok=x=>(!_selectedSource||x.source===_selectedSource)
+            &&(!_selectedProject||x.project===_selectedProject);
+  if(!_selectedSource && !_selectedProject)
+    return {prompts:allPrompts, usage:allUsage, sess:sessions};
   return {
-    prompts: allPrompts.filter(p=>p.project===_selectedProject),
-    usage:   allUsage.filter(u=>u.project===_selectedProject),
-    sess:    sessions.filter(s=>s.project===_selectedProject),
+    prompts: allPrompts.filter(ok),
+    usage:   allUsage.filter(ok),
+    sess:    sessions.filter(ok),
   };
 }
 
 function render(){
+  renderSourceFilter();
   renderProjFilter();
   renderModelFilter();
   cards();
@@ -730,12 +938,13 @@ function showReport(){
 
 //// ---- CSV (by session) ----
 function downloadCsv(){
-  const head=['project','session','start','end','duration','prompts','model',
+  const head=['source','project','session','start','end','duration','prompts','model',
               'in_tokens','out_tokens','cache_write','cache_read','total_tokens',
               'est_cost_usd','first_prompt'];
   const lines=[head.join(',')];
-  for(const r of [...sessions].sort((a,b)=>a.start-b.start)){
-    const cells=[r.project,r.session,fdate(r.start),fdate(r.end),fdur(r.durMs),r.msgs,r.model,
+  // export the currently filtered sessions so Source/Project selection is respected
+  for(const r of [...filteredData().sess].sort((a,b)=>a.start-b.start)){
+    const cells=[r.source||'',r.project,r.session,fdate(r.start),fdate(r.end),fdur(r.durMs),r.msgs,r.model,
                  r.tin,r.tout,r.tcw,r.tcr,r.toktot,r.cost.toFixed(4),
                  r.prompt.replace(/\s+/g,' ')];
     lines.push(cells.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(','));
@@ -745,38 +954,130 @@ function downloadCsv(){
   a.href=URL.createObjectURL(blob); a.download='claude_report.csv'; a.click();
 }
 
-//// ---- events ----
-async function pickAndLoad(){
+//// ---- source registry (persistent catalog) ----
+// Named folders (e.g. "claude", "abap-ai", "lens") stay registered permanently.
+// Checkboxes pick which ones are ACTIVE — only active sources are loaded & shown,
+// so different log kinds are never mixed unless you tick more than one.
+let logSources=[];        // [{id,label,handle}] — the catalog
+let activeIds=new Set();  // ids currently ticked
+const uid=()=> (crypto.randomUUID?crypto.randomUUID():'s'+Date.now()+Math.random().toString(16).slice(2));
+async function getSources(){ return (await idbGet('sources'))||[]; }
+async function saveSources(){
+  await idbSet('sources', logSources.map(s=>({id:s.id,label:s.label,handle:s.handle})));
+}
+async function saveActive(){ await idbSet('activeSources', [...activeIds]); }
+async function migrateLegacy(){
+  // one-time: fold the old single 'dir' handle into the catalog
+  if((await idbGet('sources'))) return;
+  const old=await idbGet('dir');
+  if(old){ logSources=[{id:uid(),label:old.name||'logs',handle:old}]; await saveSources(); }
+}
+async function ensurePermission(handle){
+  let p=await handle.queryPermission({mode:'read'});
+  if(p!=='granted') p=await handle.requestPermission({mode:'read'});
+  return p==='granted';
+}
+async function addSource(){
   if(!window.showDirectoryPicker){
+    // fallback (no File System Access API): ad-hoc one-shot load, no persistence
     const inp=document.createElement('input'); inp.type='file'; inp.webkitdirectory=true;
-    inp.onchange=async()=>{ $('#status').textContent='Loading files…';
+    inp.onchange=async()=>{ $('#status').textContent='Loading…';
       await loadFromFiles(inp.files); showReport(); };
     inp.click(); return;
   }
   try{
-    const handle=await window.showDirectoryPicker({id:'claude-projects', mode:'read'});
-    await idbSet('dir', handle);
-    $('#status').textContent='Loading files…';
-    await loadFromHandle(handle); showReport();
+    const handle=await window.showDirectoryPicker({mode:'read'});
+    const label=(prompt('Name for this source:', handle.name)||handle.name).trim()||handle.name;
+    const id=uid();
+    logSources.push({id, label, handle}); activeIds.add(id);
+    await saveSources(); await saveActive();
+    renderSourcePanel(); await reloadActive();
   }catch(e){ if(e.name!=='AbortError') alert('Error: '+e.message); }
 }
-async function tryRestore(){
-  if(!window.showDirectoryPicker) return;
-  const handle=await idbGet('dir'); if(!handle) return;
-  $('#status').innerHTML='Saved folder: <b>'+esc(handle.name)+
-    '</b><br><br><button id="grant">Connect and show report</button>';
-  $('#grant').onclick=async()=>{
-    let p=await handle.queryPermission({mode:'read'});
-    if(p!=='granted') p=await handle.requestPermission({mode:'read'});
-    if(p!=='granted'){ alert('Access denied'); return; }
-    $('#status').textContent='Loading files…';
-    await loadFromHandle(handle); showReport();
-  };
+async function renameSource(id){
+  const s=logSources.find(x=>x.id===id); if(!s) return;
+  const v=(prompt('Rename source:', s.label)||'').trim(); if(!v||v===s.label) return;
+  s.label=v; await saveSources(); renderSourcePanel(); await reloadActive();
+}
+async function removeSource(id){
+  const s=logSources.find(x=>x.id===id);
+  if(s && !confirm(`Remove source "${s.label}" from the catalog?`)) return;
+  logSources=logSources.filter(x=>x.id!==id); activeIds.delete(id);
+  await saveSources(); await saveActive();
+  renderSourcePanel(); await reloadActive();
+}
+function toggleActive(id,on){ if(on)activeIds.add(id); else activeIds.delete(id);
+  saveActive(); renderSourcePanel(); reloadActive(); }
+function setAllActive(on){ activeIds = new Set(on?logSources.map(s=>s.id):[]);
+  saveActive(); renderSourcePanel(); reloadActive(); }
+// load ONLY the ticked sources into the report (per-source dedup, never merged ids)
+async function reloadActive(){
+  const active=logSources.filter(s=>activeIds.has(s.id));
+  sessions=[]; allPrompts=[]; allUsage=[];
+  if(!active.length){
+    $('#report').hidden=true; $('#status').hidden=false;
+    $('#status').innerHTML='No source selected. Tick one in <b>Sources ▾</b>.';
+    return;
+  }
+  $('#status').hidden=false; $('#status').textContent='Loading…';
+  let loaded=0;
+  for(const s of active){
+    if(!await ensurePermission(s.handle)) continue;
+    await ingestHandle(s.handle, s.label, new Set());
+    loaded++;
+  }
+  if(loaded) showReport();
+  else { $('#status').innerHTML='No access granted. <button id="grantAll">Grant access</button>';
+         $('#grantAll').onclick=reloadActive; }
+}
+// the dropdown listbox: a checkbox + rename/delete per source, plus Add / All / None
+function renderSourcePanel(){
+  const panel=$('#srcPanel'); if(!panel) return;
+  $('#srcToggle').textContent=`Sources (${activeIds.size}/${logSources.length}) ▾`;
+  let html='';
+  if(!logSources.length){
+    html='<div class="src-empty">No sources yet. Add a log folder:</div>';
+  } else {
+    html='<div class="src-list">'+logSources.map(s=>
+      `<label class="src-row">
+         <input type="checkbox" data-id="${s.id}" ${activeIds.has(s.id)?'checked':''}>
+         <span class="src-name" title="${esc(s.label)}">${esc(s.label)}</span>
+         <button class="src-mini" data-act="rename" data-id="${s.id}" title="Rename">✎</button>
+         <button class="src-mini" data-act="del" data-id="${s.id}" title="Delete">🗑</button>
+       </label>`).join('')+'</div>';
+  }
+  html+='<div class="src-actions"><button id="srcAdd" class="sec">+ Add source</button>'+
+        (logSources.length?'<button id="srcAll" class="sec">All</button>'+
+        '<button id="srcNone" class="sec">None</button>':'')+'</div>';
+  panel.innerHTML=html;
+  panel.querySelectorAll('input[type=checkbox]').forEach(cb=>
+    cb.onchange=()=>toggleActive(cb.dataset.id, cb.checked));
+  panel.querySelectorAll('button[data-act]').forEach(b=>b.onclick=e=>{ e.preventDefault();
+    b.dataset.act==='rename' ? renameSource(b.dataset.id) : removeSource(b.dataset.id); });
+  $('#srcAdd').onclick=addSource;
+  const all=$('#srcAll'), none=$('#srcNone');
+  if(all) all.onclick=()=>setAllActive(true);
+  if(none) none.onclick=()=>setAllActive(false);
 }
 
-$('#pick').onclick=pickAndLoad;
-$('#reload').onclick=async()=>{ const h=await idbGet('dir');
-  if(h){ await loadFromHandle(h); render(); } };
+//// ---- source filter (view) ----
+// Secondary, in-view focus when MORE than one source is loaded at once.
+function renderSourceFilter(){
+  const sel=$('#srcFilter'); if(!sel) return;
+  const srcs=[...new Set(sessions.map(s=>s.source).filter(Boolean))].sort();
+  $('#srcFilterWrap').style.display = srcs.length>1 ? '' : 'none';
+  const cur=sel.value;
+  sel.innerHTML='<option value="">All sources</option>'+
+    srcs.map(s=>`<option value="${esc(s)}"${s===cur?' selected':''}>${esc(s)}</option>`).join('');
+  if(!srcs.includes(cur)){ _selectedSource=''; sel.value=''; }
+}
+
+//// ---- events ----
+$('#srcToggle').onclick=e=>{ e.stopPropagation();
+  const p=$('#srcPanel'); p.hidden=!p.hidden; };
+document.addEventListener('click',e=>{ // close the panel on outside click
+  if(!e.target.closest('.srcwrap')){ const p=$('#srcPanel'); if(p) p.hidden=true; } });
+$('#reload').onclick=reloadActive;
 $('#csv').onclick=downloadCsv;
 $('#filter').oninput=render;
 $('#mode').onchange=e=>{ mode=e.target.value; render(); };
@@ -785,7 +1086,23 @@ $('#next').onclick=()=>{ cursor=addDays(cursor, period().step); render(); };
 $('#latest').onclick=()=>{ if(allPrompts.length)
   cursor=new Date(Math.max(...allPrompts.map(p=>+p.ts))); render(); };
 
-tryRestore();
+async function init(){
+  if(!window.showDirectoryPicker){            // fallback browsers: Add button only
+    renderSourcePanel(); return;
+  }
+  await migrateLegacy();
+  logSources=await getSources();
+  const savedActive=await idbGet('activeSources');
+  activeIds = new Set(savedActive!=null ? savedActive : logSources.map(s=>s.id));
+  renderSourcePanel();
+  if(logSources.length){
+    $('#status').innerHTML=`<b>${logSources.length} source(s) in catalog</b> · ${activeIds.size} selected.`+
+      '<br><br><button id="loadSel">Load selected</button>'+
+      '<br><br><span class="muted">Pick which to view in «Sources ▾».</span>';
+    $('#loadSel').onclick=reloadActive;
+  }
+}
+init();
 </script>
 </body>
 </html>
